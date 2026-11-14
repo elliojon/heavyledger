@@ -100,6 +100,7 @@ export default function AboutPage() {
           {[
             { label: "Platform", href: "/" },
             { label: "About", href: "/about" },
+          { label: "Training Log", href: "/log" },
           ].map((item) => (
             <a key={item.label} href={item.href} style={{
               fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,

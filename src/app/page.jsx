@@ -126,6 +126,7 @@ function NavBar({ scrolled }) {
         {[
           { label: "Platform", href: "/" },
           { label: "About", href: "/about" },
+          { label: "Training Log", href: "/log" },
         ].map((item) => (
           <a
             key={item.label}
