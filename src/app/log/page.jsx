@@ -15,7 +15,7 @@ export default function LogPage() {
         supabase: getSupabase(),
         onReady: (profile) => {
           if (!profile) return false;
-          window.location.replace("/u/" + encodeURIComponent(profile.username) + window.location.hash);
+          window.location.replace("/u/" + encodeURIComponent(profile.username) + "/log" + window.location.hash);
           return true;
         },
       });

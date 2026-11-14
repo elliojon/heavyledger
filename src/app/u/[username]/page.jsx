@@ -1,243 +1,115 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getSupabase } from "../../../lib/supabase";
-import "../../log/tracker.css";
-import { mountTracker } from "../../log/tracker";
-import { trackerMarkup } from "../../log/markup";
+import SiteNav from "../../../components/profile/SiteNav";
+import EditProfile from "../../../components/profile/EditProfile";
+import Training from "../../../components/profile/Training";
+import { ProfileHeader, ConnectButton, About, Credentials, Connections, Testimonials } from "../../../components/profile/Sections";
+import { C, serif, btn } from "../../../components/profile/theme";
 
-const C = { bg: "#0C0C0C", card: "#151515", line: "#262626", cream: "#F5F0E8", muted: "#9A958C", gold: "#C5A572", miss: "#E07A68" };
-const serif = "'Instrument Serif', Georgia, serif";
-const sans = "'IBM Plex Sans', Helvetica, sans-serif";
-const mono = "'IBM Plex Mono', monospace";
-
-/* ---- formatting (mirrors the tracker's notation) ---- */
-const LB = 2.20462262;
-const partName = (p) => p.base + (p.mods && p.mods.length ? " (" + p.mods.join(", ") + ")" : "");
-const exName = (e) => e.parts.map(partName).join(" + ");
-const sum = (a) => (a || []).reduce((x, y) => x + (+y || 0), 0);
-const num = (v) => { v = Math.round(v * 2) / 2; return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1); };
-function setUnit(s) { return s.u || "kg"; }
-function weight(s) {
-  if (!(s.w > 0)) return "BW";
-  const u = setUnit(s);
-  return s.wr != null ? String(Math.round(s.wr * 100) / 100) : num(u === "lb" ? s.w * LB : s.w);
-}
-function reps(s) {
-  return s.plan.map((p, i) => { const m = s.made ? s.made[i] || 0 : null; if (!p && !m) return "–"; if (m === null) return String(p); return m >= p ? String(m) : m + "/" + p; }).join("+");
-}
-function compact(sets) {
-  const out = [];
-  sets.forEach((s) => { const k = weight(s) + "×" + reps(s); const l = out[out.length - 1]; if (l && l.k === k) l.n++; else out.push({ k, n: 1 }); });
-  return out.map((o) => (o.n > 1 ? o.k + " (×" + o.n + ")" : o.k)).join(", ");
-}
-const fmtDate = (s, o) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, o || { weekday: "short", month: "short", day: "numeric", year: "numeric" }); };
-const initials = (name) => (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+const PEOPLE_COLS = "id,username,display_name,avatar_url,headline";
 
 export default function ProfilePage({ params, searchParams }) {
   const username = decodeURIComponent(params.username || "").toLowerCase();
-  const [state, setState] = useState({ status: "loading" });
+  const [s, setS] = useState({ status: "loading" });
   const [publicView, setPublicView] = useState(searchParams && searchParams.view === "public");
-  const setProfile = (profile) => setState((s) => ({ ...s, profile }));
-  const ownerMode = state.status === "ok" && state.me && !publicView;
+  const [editing, setEditing] = useState(false);
+  const sb = typeof window !== "undefined" ? getSupabase() : null;
 
-  // Refresh public sessions whenever the owner switches to the public view, since they may have just changed them.
-  useEffect(() => {
-    if (!publicView || state.status !== "ok") return;
+  const load = useCallback(async () => {
     const sb = getSupabase();
-    sb.from("workouts").select("id,date,data").eq("user_id", state.profile.id).eq("visibility", "public").order("date", { ascending: false }).limit(50)
-      .then((w) => setState((s) => ({ ...s, workouts: w.data || [] })));
-  }, [publicView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const sb = getSupabase();
-    if (!sb) { setState({ status: "unconfigured" }); return; }
-    (async () => {
-      const prof = await sb.from("profiles").select("*").eq("username", username).maybeSingle();
-      if (prof.error) { setState({ status: "error", error: prof.error.message }); return; }
-      if (!prof.data) { setState({ status: "missing" }); return; }
-      const [w, sess] = await Promise.all([
-        sb.from("workouts").select("id,date,data").eq("user_id", prof.data.id).eq("visibility", "public").order("date", { ascending: false }).limit(50),
-        sb.auth.getSession(),
-      ]);
-      const me = sess.data && sess.data.session && sess.data.session.user.id === prof.data.id;
-      setState({ status: "ok", profile: prof.data, workouts: w.data || [], me });
-    })();
+    if (!sb) { setS({ status: "unconfigured" }); return; }
+    const { data: { session } } = await sb.auth.getSession();
+    const meId = session ? session.user.id : null;
+    const prof = await sb.from("profiles").select("*").eq("username", username).maybeSingle();
+    if (prof.error) { setS({ status: "error", error: prof.error.message }); return; }
+    if (!prof.data) { setS({ status: "missing" }); return; }
+    const p = prof.data, isOwner = meId === p.id;
+    const [w, cn, ts] = await Promise.all([
+      sb.from("workouts").select("id,date,visibility,data").eq("user_id", p.id).order("date", { ascending: false }).limit(500),
+      sb.from("connections").select("*").or(`requester.eq.${p.id},addressee.eq.${p.id}`),
+      sb.from("testimonials").select("*").eq("subject", p.id).order("created_at", { ascending: false }),
+    ]);
+    const rows = cn.data || [];
+    const other = (r) => (r.requester === p.id ? r.addressee : r.requester);
+    const accepted = rows.filter((r) => r.status === "accepted").map(other);
+    const pendingIn = isOwner ? rows.filter((r) => r.status === "pending" && r.addressee === p.id).map((r) => r.requester) : [];
+    let relation = null;
+    if (meId && !isOwner) {
+      const r = rows.find((x) => x.requester === meId || x.addressee === meId);
+      relation = !r ? null : r.status === "accepted" ? "connected" : r.requester === meId ? "outgoing" : "incoming";
+    }
+    const tsRows = ts.data || [];
+    const ids = [...new Set([...accepted, ...pendingIn, ...tsRows.map((t) => t.author)])];
+    const people = ids.length ? (await sb.from("profiles").select(PEOPLE_COLS).in("id", ids)).data || [] : [];
+    const byId = Object.fromEntries(people.map((x) => [x.id, x]));
+    const workouts = (w.data || []).map((r) => ({ ...r.data, id: r.id, date: r.date, visibility: r.visibility }));
+    setS({
+      status: "ok", p, meId, isOwner, relation, workouts, testimonials: tsRows, authors: byId,
+      connections: accepted.map((id) => byId[id]).filter(Boolean), pending: pendingIn.map((id) => byId[id]).filter(Boolean),
+    });
   }, [username]);
+  useEffect(() => { load(); }, [load]);
+
+  if (s.status !== "ok") {
+    return (
+      <Shell>
+        {s.status === "loading" && <p style={{ color: C.muted }}>Loading…</p>}
+        {s.status === "unconfigured" && <p style={{ color: C.muted }}>Profiles aren't switched on for this deployment yet.</p>}
+        {s.status === "error" && <p style={{ color: C.miss }}>Couldn't load this profile: {s.error}</p>}
+        {s.status === "missing" && (
+          <div style={{ padding: "60px 0" }}>
+            <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 44, margin: 0, color: C.cream }}>No one here yet.</h1>
+            <p style={{ color: C.muted }}>There's no Heavy Ledger profile at @{username}. <a href="/log" style={{ color: C.gold }}>Start your own</a>.</p>
+          </div>
+        )}
+      </Shell>
+    );
+  }
+
+  const { p, meId, isOwner, relation } = s;
+  const asOwner = isOwner && !publicView;
+  // "View as public" shows what a signed-out visitor sees: public sessions only.
+  const workouts = isOwner && publicView ? s.workouts.filter((w) => w.visibility === "public") : s.workouts;
+
+  const act = async (fn) => { const r = await fn(); if (r && r.error) console.error(r.error.message); await load(); };
+  const connect = () => act(() => sb.from("connections").insert({ requester: meId, addressee: p.id }));
+  const accept = (from) => act(() => sb.from("connections").update({ status: "accepted", accepted_at: new Date().toISOString() }).eq("requester", from).eq("addressee", meId));
+  const removeBetween = (a, b) => act(() => sb.from("connections").delete().or(`and(requester.eq.${a},addressee.eq.${b}),and(requester.eq.${b},addressee.eq.${a})`));
+
+  const actions = asOwner ? (
+    <>
+      <a href={`/u/${p.username}/log`} style={{ ...btn("primary"), textDecoration: "none" }}>Log a workout</a>
+      <button style={btn()} onClick={() => setEditing(true)}>Edit profile</button>
+      <button style={btn("quiet")} onClick={() => { setPublicView(true); window.scrollTo(0, 0); }}>View as public</button>
+    </>
+  ) : isOwner ? (
+    <button style={btn()} onClick={() => setPublicView(false)}>← Back to my page</button>
+  ) : (
+    <ConnectButton relation={relation} signedIn={!!meId} onConnect={connect} onAccept={() => accept(p.id)} onRemove={() => removeBetween(meId, p.id)} />
+  );
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.cream, fontFamily: sans }}>
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif&display=swap" />
-      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px", maxWidth: 880, margin: "0 auto" }}>
-        <a href="/" style={{ color: C.cream, textDecoration: "none", fontFamily: mono, letterSpacing: "0.15em", fontSize: 13 }}>HEAVY LEDGER</a>
-        {state.status === "ok" && state.me ? (
-          <button onClick={() => { setPublicView(!publicView); window.scrollTo(0, 0); }} style={navBtn}>
-            {publicView ? "← Back to my log" : "View as public"}
-          </button>
-        ) : (
-          <a href="/log" style={{ color: C.gold, textDecoration: "none", fontSize: 14 }}>Start your own log →</a>
-        )}
-      </nav>
-      {ownerMode ? (
-        <>
-          <div style={{ maxWidth: 720, margin: "0 auto", padding: "0 16px" }}>
-            <Header p={state.profile} me compact />
-          </div>
-          <OwnerLog onProfile={setProfile} />
-        </>
-      ) : (
-      <main style={{ maxWidth: 880, margin: "0 auto", padding: "8px 24px 80px" }}>
-        {state.status === "loading" && <p style={{ color: C.muted }}>Loading…</p>}
-        {state.status === "unconfigured" && <p style={{ color: C.muted }}>Profiles aren't switched on for this deployment yet.</p>}
-        {state.status === "error" && <p style={{ color: C.miss }}>Couldn't load this profile: {state.error}</p>}
-        {state.status === "missing" && (
-          <div style={{ padding: "60px 0" }}>
-            <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 44, margin: 0 }}>No one here yet.</h1>
-            <p style={{ color: C.muted }}>There's no Heavy Ledger profile at @{username}. <a href="/log" style={{ color: C.gold }}>Start your own log</a>.</p>
-          </div>
-        )}
-        {state.status === "ok" && <Profile {...state} me={state.me && !publicView} previewing={state.me && publicView} />}
-      </main>
-      )}
+    <Shell>
+      <ProfileHeader p={p} isOwner={isOwner} publicView={publicView} connectionsCount={s.connections.length} actions={actions} />
+      <About p={p} isOwner={asOwner} onEdit={() => setEditing(true)} />
+      <Credentials p={p} isOwner={asOwner} onEdit={() => setEditing(true)} />
+      <Connections people={s.connections} pending={asOwner ? s.pending : []} isOwner={asOwner} onAccept={accept} onDecline={(from) => removeBetween(from, meId)} />
+      <Testimonials p={p} items={s.testimonials} authors={s.authors} isOwner={isOwner} meId={meId} publicView={publicView}
+        onSubmit={async (t) => { const r = await sb.from("testimonials").insert({ subject: p.id, author: meId, ...t }); if (r.error) return r.error.code === "23505" ? "You've already written one." : r.error.message; await load(); return null; }}
+        onStatus={(id, status) => act(() => sb.from("testimonials").update({ status }).eq("id", id))}
+        onDelete={(id) => act(() => sb.from("testimonials").delete().eq("id", id))} />
+      <Training p={p} workouts={workouts} isOwner={isOwner} publicView={publicView} username={p.username} />
+      {editing && <EditProfile sb={sb} p={p} onClose={() => setEditing(false)} onSaved={(np) => { setEditing(false); setS((x) => ({ ...x, p: np })); }} />}
+    </Shell>
+  );
+}
+
+function Shell({ children }) {
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.cream }}>
+      <SiteNav />
+      <main style={{ maxWidth: 760, margin: "0 auto", padding: "16px 12px 80px" }}>{children}</main>
     </div>
   );
-}
-
-const navBtn = { background: "transparent", color: C.gold, border: `1px solid ${C.gold}`, borderRadius: 8, padding: "7px 14px", fontSize: 13, fontFamily: sans, cursor: "pointer" };
-
-// The owner's own training log, mounted under their profile header.
-function OwnerLog({ onProfile }) {
-  const ref = useRef(null);
-  const cb = useRef(onProfile);
-  cb.current = onProfile;
-  useEffect(() => {
-    // The tracker owns this element's contents; React never renders children into it.
-    ref.current.innerHTML = trackerMarkup(true);
-    return mountTracker({ supabase: getSupabase(), embedded: true, onProfile: (p) => cb.current(p) });
-  }, []);
-  return (
-    <>
-      <link
-        rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
-      />
-      <div className="hlt hl-dark embedded" ref={ref} />
-    </>
-  );
-}
-
-function Header({ p, me, compact }) {
-  const featured = (p.featured || []).filter((f) => f && f.name && f.heavy);
-  return (
-    <header style={{ display: "flex", gap: compact ? 16 : 22, alignItems: "flex-start", padding: compact ? "8px 0 20px" : "24px 0 28px", borderBottom: compact ? "none" : `1px solid ${C.line}`, flexWrap: "wrap" }}>
-      <div style={{ width: compact ? 64 : 84, height: compact ? 64 : 84, borderRadius: "50%", background: C.gold, color: C.bg, display: "grid", placeItems: "center", fontFamily: serif, fontSize: compact ? 26 : 34, flex: "none" }}>{initials(p.display_name || p.username)}</div>
-      <div style={{ flex: 1, minWidth: 220 }}>
-        <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: compact ? 34 : 44, lineHeight: 1.05, margin: 0 }}>{p.display_name || p.username}</h1>
-        <div style={{ fontFamily: mono, fontSize: 13, color: C.muted, marginTop: 8 }}>@{p.username}{p.location ? " · " + p.location : ""}</div>
-        {p.bio && <p style={{ fontSize: compact ? 15 : 16, lineHeight: 1.6, color: "#D9D3C7", maxWidth: 620, margin: "12px 0 0", whiteSpace: "pre-wrap" }}>{p.bio}</p>}
-        {compact && featured.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-            {featured.map((f) => (
-              <span key={f.name} style={{ fontFamily: mono, fontSize: 12, border: `1px solid ${C.line}`, borderRadius: 999, padding: "4px 10px" }}>
-                {f.name} <span style={{ color: C.gold }}>{f.heavy}</span> <span style={{ color: C.muted }}>{f.unit}</span>
-              </span>
-            ))}
-          </div>
-        )}
-        {me && (
-          <a href="#settings" style={{ display: "inline-block", marginTop: 12, color: C.gold, fontSize: 13 }}>
-            Edit profile
-          </a>
-        )}
-      </div>
-    </header>
-  );
-}
-
-function Profile({ profile: p, workouts, me, previewing }) {
-  const featured = (p.featured || []).filter((f) => f && f.name);
-  return (
-    <>
-      {previewing && (
-        <div style={{ border: `1px solid ${C.gold}`, color: C.gold, borderRadius: 10, padding: "10px 14px", fontSize: 14, marginBottom: 8 }}>
-          This is what others see. Only featured lifts and sessions you've set to Public appear here.
-        </div>
-      )}
-      <Header p={p} />
-
-      <Section title="Featured lifts">
-        {featured.length ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
-            {featured.map((f) => (
-              <div key={f.name} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-                <div style={{ fontSize: 15, fontWeight: 600 }}>{f.name}</div>
-                <div style={{ fontFamily: mono, fontSize: 34, color: C.gold, marginTop: 10 }}>{f.heavy ? f.heavy : "—"}<span style={{ fontSize: 15, color: C.muted, marginLeft: 6 }}>{f.unit}</span></div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{f.cx ? "heaviest complete complex" : "heaviest made"}</div>
-                {!f.cx && f.reps && Object.keys(f.reps).length > 0 && (
-                  <div style={{ display: "flex", gap: 14, marginTop: 14, fontFamily: mono, fontSize: 13, flexWrap: "wrap" }}>
-                    {[1, 3, 5, 10].filter((r) => f.reps[r]).map((r) => (
-                      <span key={r}><span style={{ color: C.muted }}>{r}RM </span>{f.reps[r]}</span>
-                    ))}
-                    {f.e1 ? <span><span style={{ color: C.muted }}>e1RM </span>{f.e1}</span> : null}
-                  </div>
-                )}
-                {f.last && <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>Last trained {fmtDate(f.last, { month: "short", day: "numeric", year: "numeric" })}</div>}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: C.muted }}>{me ? "Open any lift in your log and tap “Feature on your profile” to show it here." : "Nothing featured yet."}</p>
-        )}
-      </Section>
-
-      <Section title="Training log" right={workouts.length ? `${workouts.length} public session${workouts.length === 1 ? "" : "s"}` : ""}>
-        {workouts.length ? (
-          workouts.map(({ id, date, data }) => {
-            const ex = (data.exercises || []).map((e) => ({ e, sets: (e.sets || []).filter((s) => s.made) })).filter((x) => x.sets.length);
-            const misses = ex.reduce((n, x) => n + x.sets.filter((s) => s.plan.some((pl, i) => (s.made[i] || 0) < pl)).length, 0);
-            const prs = data.prs || [];
-            return (
-              <article key={id} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginTop: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 600, fontSize: 16 }}>
-                    {data.title || "Session"}
-                    {prs.length > 0 && <Tag color={C.gold}>{prs.length} PR</Tag>}
-                    {misses > 0 && <Tag color={C.miss}>{misses} missed</Tag>}
-                  </div>
-                  <div style={{ fontSize: 13, color: C.muted }}>{fmtDate(date)}</div>
-                </div>
-                <div style={{ marginTop: 10 }}>
-                  {ex.map(({ e, sets }, i) => (
-                    <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(140px,38%) 1fr", gap: 14, padding: "5px 0", borderTop: i ? `1px solid ${C.line}` : "none", fontSize: 14 }}>
-                      <span>{exName(e)}</span>
-                      <span style={{ fontFamily: mono, color: "#CFC9BD" }}>{compact(sets)} <span style={{ color: C.muted }}>{setUnit(sets[0])}</span></span>
-                    </div>
-                  ))}
-                </div>
-                {data.notes && <p style={{ fontSize: 14, color: C.muted, whiteSpace: "pre-wrap", margin: "10px 0 0" }}>{data.notes}</p>}
-              </article>
-            );
-          })
-        ) : (
-          <p style={{ color: C.muted }}>{me ? "Your sessions are private. In your log's History, set a session to Public to show it here." : "No public sessions yet."}</p>
-        )}
-      </Section>
-      <p style={{ fontSize: 12, color: C.muted, marginTop: 40 }}>Notation: weight×reps. 2/3 means 2 of 3 planned reps made. Complexes show reps per movement, e.g. 1+1+3.</p>
-    </>
-  );
-}
-
-function Section({ title, right, children }) {
-  return (
-    <section style={{ marginTop: 34 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
-        <h2 style={{ fontFamily: mono, fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, fontWeight: 500, margin: 0 }}>{title}</h2>
-        {right && <span style={{ fontSize: 13, color: C.muted }}>{right}</span>}
-      </div>
-      {children}
-    </section>
-  );
-}
-function Tag({ color, children }) {
-  return <span style={{ marginLeft: 8, fontSize: 11, fontFamily: mono, letterSpacing: "0.06em", textTransform: "uppercase", color, border: `1px solid ${color}`, borderRadius: 5, padding: "1px 6px", verticalAlign: 2 }}>{children}</span>;
 }

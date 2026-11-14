@@ -197,7 +197,7 @@ function featuredSnapshot(){
     return {name:n,unit:u,cx:o.cx,heavy:+fmtIn(o.heavy,u)||0,e1:o.cx?0:(+fmtIn(o.e1,u)||0),reps,sessions:o.sessions,last:o.last}; });
 }
 let featT=null;
-function syncFeatured(){ if(!sb||Store.mode!=="db"||!Store.profile)return; clearTimeout(featT); featT=setTimeout(async()=>{ const featured=featuredSnapshot(); Store.profile.featured=featured; const r=await sb.from("profiles").update({featured,updated_at:new Date().toISOString()}).eq("id",Store.uid); if(r.error)console.warn(r.error); else { flash(); notifyProfile(); } },800); }
+function syncFeatured(){ if(!sb||Store.mode!=="db"||!Store.profile)return; clearTimeout(featT); featT=setTimeout(async()=>{ const featured=featuredSnapshot(); Store.profile.featured=featured; const r=await sb.from("profiles").update({featured,unit:U(),updated_at:new Date().toISOString()}).eq("id",Store.uid); if(r.error)console.warn(r.error); else { flash(); notifyProfile(); } },800); }
 function isFeatured(n){ return !!(Store.profile&&(Store.profile.featured||[]).some(f=>f.name===n)); }
 function rows(res){
   const arr=Array.isArray(res)?res:(res&&(res.docs||res.items||res.rows))||[];
@@ -394,6 +394,7 @@ function vLog(){
     let h="";
     if(lastResult&&(lastResult.prs.length||lastResult.misses)){ h+=`<div class="prbox">${lastResult.prs.length?`<b>New records</b><div class="small" style="margin-top:6px">${lastResult.prs.map(p=>esc(p.name)+" — "+fmtIn(p.val,unitFor(p.name))+" "+unitFor(p.name)+" ("+p.kind+")").join("<br>")}</div>`:""}${lastResult.misses?`<div class="small muted" style="margin-top:${lastResult.prs.length?8:0}px">${lastResult.misses} missed set${lastResult.misses>1?"s":""} logged — they count toward your make rate, not your records.</div>`:""}</div>` }
     h+=`<div class="stats"><div class="stat"><div class="n">${ws.filter(w=>w.date>=wkStr).length}</div><div class="l">Last 7 days</div></div><div class="stat"><div class="n">${ws.filter(w=>w.date.startsWith(mo)).length}</div><div class="l">This month</div></div><div class="stat"><div class="n">${ws.length}</div><div class="l">All sessions</div></div></div>`;
+    if(opts&&opts.profileHref) h+=`<div class="row" style="gap:16px;margin-top:12px;font-size:14px"><a href="${opts.profileHref}">My page →</a><a href="${opts.statsHref}">Stats →</a></div>`;
     const nx=upNext();
     if(nx.length){ h+=`<h2>Up next</h2>`; nx.forEach(x=>{ h+=`<button class="list-item" data-a="startplan" data-p="${x.p.id}" data-s="${x.s.id}"><div class="li-top"><span class="li-title">${esc(x.s.title||"Day "+(x.i+1))}</span><span class="small muted">${esc(x.p.name)} · ${x.i+1}/${x.p.sessions.length}</span></div><div class="li-sub">${x.s.exercises.map(e=>esc(exName(e))).join(" · ")||"No exercises yet"}</div></button>` }) }
     h+=`<div style="margin-top:18px"><button class="btn ${nx.length?"":"primary"} big" data-a="start">Start an empty session</button></div>`;
@@ -533,7 +534,7 @@ function vHistory(){
       w.exercises.forEach(e=>{ h+=`<div class="exl"><b>${e.group?"⛓ ":""}${esc(exName(e))}${prs.some(p=>p.name===liftKey(e))?'<span class="badge">PR</span>':""}</b><span>${esc(compactSets(attempted(e),false,e.parts))}</span></div>` });
       const cxp=prs.filter(p=>!w.exercises.some(e=>liftKey(e)===p.name)); if(cxp.length)h+=`<div class="cxpr">Records inside complexes: ${cxp.map(p=>esc(p.name)+" "+fmtIn(p.val,unitFor(p.name))+" "+unitFor(p.name)).join(" · ")}</div>`;
       if(w.notes)h+=`<p class="small muted" style="white-space:pre-wrap">${esc(w.notes)}</p>`;
-      if(Store.mode==="db")h+=`<div class="row wrapf" style="margin-top:10px;gap:8px"><span class="small muted">Who can see this:</span><div class="seg">${["private","public"].map(v=>`<button class="${(w.visibility||"private")===v||(v==="private"&&w.visibility==="connections")?"on":""}" data-a="wvis" data-id="${w.id}" data-v="${v}">${v==="private"?"Only me":"Public"}</button>`).join("")}</div></div>`;
+      if(Store.mode==="db")h+=`<div class="row wrapf" style="margin-top:10px;gap:8px"><span class="small muted">Who can see this:</span><div class="seg">${["private","connections","public"].map(v=>`<button class="${(w.visibility||"private")===v?"on":""}" data-a="wvis" data-id="${w.id}" data-v="${v}">${v==="private"?"Only me":v==="connections"?"Connections":"Public"}</button>`).join("")}</div></div>`;
       h+=`<div class="row wrapf" style="margin-top:10px;gap:8px">${state.draft?"":`<button class="btn sm" data-a="repeat" data-id="${w.id}">Repeat</button><button class="btn sm" data-a="edit" data-id="${w.id}">Edit</button>`}${state.programs.length?`<button class="btn sm" data-a="toplan" data-id="${w.id}">Save as plan</button>`:""}
       ${confirmKey==="del"+w.id?`<button class="btn sm danger" data-a="delw" data-id="${w.id}">Delete for good</button><button class="btn sm ghost" data-a="cancel">Cancel</button>`:`<button class="btn sm ghost danger" data-a="askdel" data-id="${w.id}">Delete</button>`}</div>
       ${confirmKey==="toplan"+w.id?`<div class="row wrapf" style="margin-top:8px;gap:6px"><span class="small muted">Add to:</span>${state.programs.map(p=>`<button class="chip" data-a="toplango" data-id="${w.id}" data-p="${p.id}">${esc(p.name)}</button>`).join("")}</div>`:""}</div>`;
@@ -596,13 +597,8 @@ function vSettings(){
   const S=state.settings; const sw=(k,label,sub)=>`<div class="toggle"><div><div>${label}</div>${sub?`<div class="hint">${sub}</div>`:""}</div><button class="sw ${S[k]?"on":""}" data-a="sw" data-k="${k}" aria-label="${label}"></button></div>`;
   const xu=Object.entries(S.exUnits||{});
   const P=Store.profile;
-  const prof=Store.mode==="db"&&P?`<h2>Profile</h2><div class="card stack">
-    <div class="row spread wrapf"><div><b>@${esc(P.username)}</b><div class="hint">heavyledger.com/u/${esc(P.username)}</div></div><a class="btn sm" href="/u/${esc(P.username)}?view=public">View as public</a></div>
-    <label class="field">Display name<input id="pfName" value="${esc(P.display_name||"")}"></label>
-    <label class="field">Location<input id="pfLoc" value="${esc(P.location||"")}" placeholder="City, or leave blank"></label>
-    <label class="field">Bio<textarea id="pfBio" style="min-height:80px" placeholder="What you train, what you coach, what you're working toward">${esc(P.bio||"")}</textarea></label>
-    <div class="row"><button class="btn primary sm" data-a="saveprofile">Save profile</button><span id="pfMsg" class="small muted"></span></div>
-    <p class="hint" style="margin:0">Featured lifts: open any lift on the Lifts tab and tap “Feature on your profile”. Only the numbers you feature are shown — never your private sessions.</p></div>`:"";
+  const prof=Store.mode==="db"&&P?`<h2>Profile</h2><div class="card row spread wrapf"><div><b>@${esc(P.username)}</b><div class="hint">Photo, banner, bio, credentials and connections live on your page.</div></div><a class="btn sm" href="/u/${esc(P.username)}">Edit on my page</a></div>
+    <p class="hint">Featured lifts: open any lift on the Lifts tab and tap “Feature on your profile”. Only the numbers you feature are shown, never your private sessions.</p>`:"";
   return prof+`<h2>Units</h2><div class="card">
     <div class="toggle"><div><div>Main unit</div><div class="hint">Records, goals and totals are shown in this.</div></div><div class="seg"><button class="${U()==="kg"?"on":""}" data-a="unit" data-u="kg">kg</button><button class="${U()==="lb"?"on":""}" data-a="unit" data-u="lb">lb</button></div></div>
     ${sw("convert","Convert everything to "+U(),"Type dumbbells in lb, see "+U()+" everywhere else. Turn off to show each set in the unit you typed it in.")}
@@ -612,7 +608,7 @@ function vSettings(){
   </div>
   <h2>Logging</h2><div class="card">${sw("autoTimer","Restart the timer when a set is marked","Use it as a rest timer without an extra tap.")}${sw("rpe","Log RPE","Adds an optional effort column to each set.")}</div>
   <h2>Default visibility</h2><div class="seg">${["private","connections","public"].map(v=>`<button class="${S.visibility===v?"on":""}" data-a="vis" data-v="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join("")}</div>
-  <p class="hint">Applied to new sessions. “Public” sessions appear on your profile; you can change any session from History. “Connections” behaves like private until connections launch.</p>
+  <p class="hint">Applied to new sessions. “Public” sessions appear on your profile; you can change any session from History. “Connections” sessions are visible to people you've connected with.</p>
   <h2>Your data</h2><div class="card stack"><p class="hint" style="margin:0">Your log belongs to you. Copy it out as JSON anytime, or paste a backup to restore it.</p>
   <div class="row wrapf"><button class="btn" data-a="export">Copy my data</button><button class="btn" data-a="importopen">Restore from backup</button><span id="exmsg" class="small muted"></span></div>
   <div id="importbox"></div></div>
