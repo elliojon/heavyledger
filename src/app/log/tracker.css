@@ -190,3 +190,17 @@
 .hlt nav a{color:var(--muted)}
 .hlt nav a.on{color:var(--ink)}
 .hlt a.btn{text-decoration:none;color:var(--ink);display:inline-block}
+
+/* Heavy Ledger house style: dark with gold, matching the marketing pages */
+.hlt.hl-dark{
+  --bg:#0C0C0C; --paper:#151515; --ink:#F5F0E8; --muted:#9A958C; --line:#2A2A2A; --line2:#1E1E1E;
+  --accent:#C5A572; --accent-ink:#0C0C0C; --accent-soft:#2A2418; --pr:#7FC8A9; --pr-soft:#15241E;
+  --danger:#E07A68; --miss-soft:#2B1915;
+  color-scheme:dark;
+}
+.hlt.hl-dark .tbtn.stop{background:var(--ink);color:var(--bg)}
+.hlt.embedded .top-inner{position:relative}
+.hlt .brand-embed{position:absolute;right:16px;top:6px;z-index:2}
+.hlt.embedded #timerSlot .timer{margin-top:10px}
+.hlt.embedded{min-height:0}
+.hlt.embedded header.top{border-top:1px solid var(--line)}

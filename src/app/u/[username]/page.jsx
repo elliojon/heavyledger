@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSupabase } from "../../../lib/supabase";
+import "../../log/tracker.css";
+import { mountTracker } from "../../log/tracker";
+import { trackerMarkup } from "../../log/markup";
 
 const C = { bg: "#0C0C0C", card: "#151515", line: "#262626", cream: "#F5F0E8", muted: "#9A958C", gold: "#C5A572", miss: "#E07A68" };
 const serif = "'Instrument Serif', Georgia, serif";
@@ -30,9 +33,20 @@ function compact(sets) {
 const fmtDate = (s, o) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, o || { weekday: "short", month: "short", day: "numeric", year: "numeric" }); };
 const initials = (name) => (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
 
-export default function ProfilePage({ params }) {
+export default function ProfilePage({ params, searchParams }) {
   const username = decodeURIComponent(params.username || "").toLowerCase();
   const [state, setState] = useState({ status: "loading" });
+  const [publicView, setPublicView] = useState(searchParams && searchParams.view === "public");
+  const setProfile = (profile) => setState((s) => ({ ...s, profile }));
+  const ownerMode = state.status === "ok" && state.me && !publicView;
+
+  // Refresh public sessions whenever the owner switches to the public view, since they may have just changed them.
+  useEffect(() => {
+    if (!publicView || state.status !== "ok") return;
+    const sb = getSupabase();
+    sb.from("workouts").select("id,date,data").eq("user_id", state.profile.id).eq("visibility", "public").order("date", { ascending: false }).limit(50)
+      .then((w) => setState((s) => ({ ...s, workouts: w.data || [] })));
+  }, [publicView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const sb = getSupabase();
@@ -42,7 +56,7 @@ export default function ProfilePage({ params }) {
       if (prof.error) { setState({ status: "error", error: prof.error.message }); return; }
       if (!prof.data) { setState({ status: "missing" }); return; }
       const [w, sess] = await Promise.all([
-        sb.from("workouts").select("id,date,data").eq("user_id", prof.data.id).eq("visibility", "public").order("date", { ascending: false }).limit(30),
+        sb.from("workouts").select("id,date,data").eq("user_id", prof.data.id).eq("visibility", "public").order("date", { ascending: false }).limit(50),
         sb.auth.getSession(),
       ]);
       const me = sess.data && sess.data.session && sess.data.session.user.id === prof.data.id;
@@ -56,8 +70,22 @@ export default function ProfilePage({ params }) {
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif&display=swap" />
       <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px", maxWidth: 880, margin: "0 auto" }}>
         <a href="/" style={{ color: C.cream, textDecoration: "none", fontFamily: mono, letterSpacing: "0.15em", fontSize: 13 }}>HEAVY LEDGER</a>
-        <a href="/log" style={{ color: C.gold, textDecoration: "none", fontSize: 14 }}>Training log →</a>
+        {state.status === "ok" && state.me ? (
+          <button onClick={() => { setPublicView(!publicView); window.scrollTo(0, 0); }} style={navBtn}>
+            {publicView ? "← Back to my log" : "View as public"}
+          </button>
+        ) : (
+          <a href="/log" style={{ color: C.gold, textDecoration: "none", fontSize: 14 }}>Start your own log →</a>
+        )}
       </nav>
+      {ownerMode ? (
+        <>
+          <div style={{ maxWidth: 720, margin: "0 auto", padding: "0 16px" }}>
+            <Header p={state.profile} me compact />
+          </div>
+          <OwnerLog onProfile={setProfile} />
+        </>
+      ) : (
       <main style={{ maxWidth: 880, margin: "0 auto", padding: "8px 24px 80px" }}>
         {state.status === "loading" && <p style={{ color: C.muted }}>Loading…</p>}
         {state.status === "unconfigured" && <p style={{ color: C.muted }}>Profiles aren't switched on for this deployment yet.</p>}
@@ -68,25 +96,74 @@ export default function ProfilePage({ params }) {
             <p style={{ color: C.muted }}>There's no Heavy Ledger profile at @{username}. <a href="/log" style={{ color: C.gold }}>Start your own log</a>.</p>
           </div>
         )}
-        {state.status === "ok" && <Profile {...state} />}
+        {state.status === "ok" && <Profile {...state} me={state.me && !publicView} previewing={state.me && publicView} />}
       </main>
+      )}
     </div>
   );
 }
 
-function Profile({ profile: p, workouts, me }) {
+const navBtn = { background: "transparent", color: C.gold, border: `1px solid ${C.gold}`, borderRadius: 8, padding: "7px 14px", fontSize: 13, fontFamily: sans, cursor: "pointer" };
+
+// The owner's own training log, mounted under their profile header.
+function OwnerLog({ onProfile }) {
+  const ref = useRef(null);
+  const cb = useRef(onProfile);
+  cb.current = onProfile;
+  useEffect(() => {
+    // The tracker owns this element's contents; React never renders children into it.
+    ref.current.innerHTML = trackerMarkup(true);
+    return mountTracker({ supabase: getSupabase(), embedded: true, onProfile: (p) => cb.current(p) });
+  }, []);
+  return (
+    <>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      />
+      <div className="hlt hl-dark embedded" ref={ref} />
+    </>
+  );
+}
+
+function Header({ p, me, compact }) {
+  const featured = (p.featured || []).filter((f) => f && f.name && f.heavy);
+  return (
+    <header style={{ display: "flex", gap: compact ? 16 : 22, alignItems: "flex-start", padding: compact ? "8px 0 20px" : "24px 0 28px", borderBottom: compact ? "none" : `1px solid ${C.line}`, flexWrap: "wrap" }}>
+      <div style={{ width: compact ? 64 : 84, height: compact ? 64 : 84, borderRadius: "50%", background: C.gold, color: C.bg, display: "grid", placeItems: "center", fontFamily: serif, fontSize: compact ? 26 : 34, flex: "none" }}>{initials(p.display_name || p.username)}</div>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: compact ? 34 : 44, lineHeight: 1.05, margin: 0 }}>{p.display_name || p.username}</h1>
+        <div style={{ fontFamily: mono, fontSize: 13, color: C.muted, marginTop: 8 }}>@{p.username}{p.location ? " · " + p.location : ""}</div>
+        {p.bio && <p style={{ fontSize: compact ? 15 : 16, lineHeight: 1.6, color: "#D9D3C7", maxWidth: 620, margin: "12px 0 0", whiteSpace: "pre-wrap" }}>{p.bio}</p>}
+        {compact && featured.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {featured.map((f) => (
+              <span key={f.name} style={{ fontFamily: mono, fontSize: 12, border: `1px solid ${C.line}`, borderRadius: 999, padding: "4px 10px" }}>
+                {f.name} <span style={{ color: C.gold }}>{f.heavy}</span> <span style={{ color: C.muted }}>{f.unit}</span>
+              </span>
+            ))}
+          </div>
+        )}
+        {me && (
+          <a href="#settings" style={{ display: "inline-block", marginTop: 12, color: C.gold, fontSize: 13 }}>
+            Edit profile
+          </a>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function Profile({ profile: p, workouts, me, previewing }) {
   const featured = (p.featured || []).filter((f) => f && f.name);
   return (
     <>
-      <header style={{ display: "flex", gap: 22, alignItems: "flex-start", padding: "24px 0 28px", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap" }}>
-        <div style={{ width: 84, height: 84, borderRadius: "50%", background: C.gold, color: C.bg, display: "grid", placeItems: "center", fontFamily: serif, fontSize: 34, flex: "none" }}>{initials(p.display_name || p.username)}</div>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 44, lineHeight: 1.05, margin: 0 }}>{p.display_name || p.username}</h1>
-          <div style={{ fontFamily: mono, fontSize: 13, color: C.muted, marginTop: 8 }}>@{p.username}{p.location ? " · " + p.location : ""}</div>
-          {p.bio && <p style={{ fontSize: 16, lineHeight: 1.6, color: "#D9D3C7", maxWidth: 620, margin: "14px 0 0", whiteSpace: "pre-wrap" }}>{p.bio}</p>}
-          {me && <a href="/log#settings" style={{ display: "inline-block", marginTop: 14, color: C.gold, fontSize: 14 }}>Edit profile</a>}
+      {previewing && (
+        <div style={{ border: `1px solid ${C.gold}`, color: C.gold, borderRadius: 10, padding: "10px 14px", fontSize: 14, marginBottom: 8 }}>
+          This is what others see. Only featured lifts and sessions you've set to Public appear here.
         </div>
-      </header>
+      )}
+      <Header p={p} />
 
       <Section title="Featured lifts">
         {featured.length ? (

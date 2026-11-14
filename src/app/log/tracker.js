@@ -4,6 +4,9 @@
 export function mountTracker(opts){
 "use strict";
 const sb=opts&&opts.supabase||null;
+const embedded=!!(opts&&opts.embedded);
+const notifyProfile=()=>{ if(opts&&opts.onProfile&&Store.profile)opts.onProfile(Object.assign({},Store.profile)); };
+const afterInit=()=>{ if(Store.mode==="db"&&opts&&opts.onReady&&opts.onReady(Store.profile))return; route(); };
 const cleanups=[];
 const on=(target,ev,fn)=>{ target.addEventListener(ev,fn); cleanups.push(()=>target.removeEventListener(ev,fn)); };
 
@@ -194,7 +197,7 @@ function featuredSnapshot(){
     return {name:n,unit:u,cx:o.cx,heavy:+fmtIn(o.heavy,u)||0,e1:o.cx?0:(+fmtIn(o.e1,u)||0),reps,sessions:o.sessions,last:o.last}; });
 }
 let featT=null;
-function syncFeatured(){ if(!sb||Store.mode!=="db"||!Store.profile)return; clearTimeout(featT); featT=setTimeout(async()=>{ const featured=featuredSnapshot(); Store.profile.featured=featured; const r=await sb.from("profiles").update({featured,updated_at:new Date().toISOString()}).eq("id",Store.uid); if(r.error)console.warn(r.error); else flash(); },800); }
+function syncFeatured(){ if(!sb||Store.mode!=="db"||!Store.profile)return; clearTimeout(featT); featT=setTimeout(async()=>{ const featured=featuredSnapshot(); Store.profile.featured=featured; const r=await sb.from("profiles").update({featured,updated_at:new Date().toISOString()}).eq("id",Store.uid); if(r.error)console.warn(r.error); else { flash(); notifyProfile(); } },800); }
 function isFeatured(n){ return !!(Store.profile&&(Store.profile.featured||[]).some(f=>f.name===n)); }
 function rows(res){
   const arr=Array.isArray(res)?res:(res&&(res.docs||res.items||res.rows))||[];
@@ -273,7 +276,7 @@ function persist(){ if(getDoc()===state.draft)Store.saveDraft(700); }
 function render(){
   document.querySelectorAll("#nav a").forEach(a=>a.classList.toggle("on",a.dataset.v===view));
   const gate=Store.mode==="auth"||Store.mode==="onboard"||Store.mode==="error";
-  $("#nav").style.display=gate?"none":""; $("#acct").innerHTML=Store.mode==="db"&&Store.profile?`<a href="/u/${esc(Store.profile.username)}">@${esc(Store.profile.username)}</a>`:"";
+  $("#nav").style.display=gate?"none":""; $("#acct").innerHTML=!embedded&&Store.mode==="db"&&Store.profile?`<a href="/u/${esc(Store.profile.username)}">@${esc(Store.profile.username)}</a>`:"";
   if(gate){ $("#app").innerHTML=Store.mode==="auth"?vLogin():Store.mode==="onboard"?vOnboard():`<div class="card" style="margin-top:24px"><b>Couldn't load your log.</b><p class="hint">${esc(Store.err||"")}</p><button class="btn" data-a="reload">Try again</button></div>`; $("#timerSlot").innerHTML=""; return; }
   let h="";
   if(Store.mode==="local")h+=`<div class="banner">Preview mode — saving on this device only.</div>`;
@@ -312,7 +315,7 @@ async function createProfile(){
   m.textContent="";
   const r=await sb.from("profiles").insert({id:Store.uid,username:u,display_name:name||u});
   if(r.error){ m.textContent=r.error.code==="23505"?"That username is taken.":r.error.message; return; }
-  Store.mode="local"; await Store.init(); route();
+  Store.mode="local"; await Store.init(); afterInit();
 }
 
 /* ---------- Timer ---------- */
@@ -594,7 +597,7 @@ function vSettings(){
   const xu=Object.entries(S.exUnits||{});
   const P=Store.profile;
   const prof=Store.mode==="db"&&P?`<h2>Profile</h2><div class="card stack">
-    <div class="row spread wrapf"><div><b>@${esc(P.username)}</b><div class="hint">heavyledger.com/u/${esc(P.username)}</div></div><a class="btn sm" href="/u/${esc(P.username)}">View profile</a></div>
+    <div class="row spread wrapf"><div><b>@${esc(P.username)}</b><div class="hint">heavyledger.com/u/${esc(P.username)}</div></div><a class="btn sm" href="/u/${esc(P.username)}?view=public">View as public</a></div>
     <label class="field">Display name<input id="pfName" value="${esc(P.display_name||"")}"></label>
     <label class="field">Location<input id="pfLoc" value="${esc(P.location||"")}" placeholder="City, or leave blank"></label>
     <label class="field">Bio<textarea id="pfBio" style="min-height:80px" placeholder="What you train, what you coach, what you're working toward">${esc(P.bio||"")}</textarea></label>
@@ -691,9 +694,9 @@ on(document,"click",ev=>{
     case "sendlink": sendLink(); break;
     case "onboard": createProfile(); break;
     case "signout": ev.preventDefault(); if(sb)sb.auth.signOut(); break;
-    case "reload": Store.reset(); Store.init().then(route); break;
+    case "reload": Store.reset(); Store.init().then(afterInit); break;
     case "saveprofile": { const P=Store.profile; const upd={display_name:$("#pfName").value.trim(),location:$("#pfLoc").value.trim(),bio:$("#pfBio").value.trim(),updated_at:new Date().toISOString()};
-      $("#pfMsg").textContent="Saving…"; sb.from("profiles").update(upd).eq("id",Store.uid).then(r=>{ if(r.error){$("#pfMsg").textContent=r.error.message;return} Object.assign(P,upd); $("#pfMsg").textContent="Saved."; }); break; }
+      $("#pfMsg").textContent="Saving…"; sb.from("profiles").update(upd).eq("id",Store.uid).then(r=>{ if(r.error){$("#pfMsg").textContent=r.error.message;return} Object.assign(P,upd); notifyProfile(); $("#pfMsg").textContent="Saved."; }); break; }
     case "feature": { const n=t.dataset.name; const P=Store.profile; P.featured=P.featured||[]; if(isFeatured(n))P.featured=P.featured.filter(f=>f.name!==n); else P.featured.push({name:n}); syncFeatured(); render(); break; }
     case "wvis": { const w=state.workouts.find(x=>x.id===t.dataset.id); if(!w)break; w.visibility=t.dataset.v; Store.saveWorkout(w); render(); break; }
     /* timer */
@@ -857,7 +860,7 @@ function alertMsg(m){const b=document.createElement("div");b.className="banner";
 function route(){ const h=location.hash.slice(1); view=["log","plan","history","lifts","settings"].includes(h)?h:"log"; confirmKey=null; missOpen=null; if(view!=="lifts")openLift=null; render(); }
 on(document,"keydown",ev=>{ if(ev.key!=="Enter")return; if(ev.target.id==="authEmail")sendLink(); else if(ev.target.id==="obUser"||ev.target.id==="obName")createProfile(); });
 on(window,"hashchange",route);
-Store.init().then(route);
-if(sb){ const { data: sub }=sb.auth.onAuthStateChange((evt)=>{ if(evt==="SIGNED_IN"&&Store.mode==="auth"){ Store.reset(); Store.init().then(route); } if(evt==="SIGNED_OUT"){ Store.reset(); Store.mode="auth"; render(); } }); cleanups.push(()=>sub.subscription.unsubscribe()); }
+Store.init().then(afterInit);
+if(sb){ const { data: sub }=sb.auth.onAuthStateChange((evt)=>{ if(evt==="SIGNED_IN"&&Store.mode==="auth"){ Store.reset(); Store.init().then(afterInit); } if(evt==="SIGNED_OUT"){ Store.reset(); Store.mode="auth"; render(); } }); cleanups.push(()=>sub.subscription.unsubscribe()); }
 return ()=>{ cleanups.forEach(f=>f()); clearInterval(tickTimer); wake(false); };
 }
