@@ -15,6 +15,8 @@ Publish substantive work. Build credibility. Connect with clients based on demon
 - `/u/[username]/log` — Logging (owner only)
 - `/u/[username]/stats` — Training stats (owner only)
 - `/people` — Find people by name or username
+- `/u/[username]/writing`, `/u/[username]/p/[slug]`, `/u/[username]/write` — Writing: publication page, posts, editor
+- `/read` — Newest writing from everyone
 
 ## Getting Started
 
@@ -27,7 +29,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Training log & profiles setup
 
-1. Create a Supabase project, then run `supabase/schema.sql` and then `supabase/migrations/002_profiles_social.sql` in its SQL Editor.
+1. Create a Supabase project, then run `supabase/schema.sql`, then the files in `supabase/migrations/` in order, in its SQL Editor.
 2. In Supabase → Authentication → URL Configuration, set the Site URL to `https://heavyledger.com` and add redirect URLs `https://heavyledger.com/**` and `https://*.vercel.app/**`.
 3. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (see `.env.example`) to Vercel and to `.env.local` for local development.
 

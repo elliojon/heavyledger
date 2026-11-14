@@ -18,3 +18,15 @@ export async function uploadProfileImage(sb, uid, file, kind) {
   if (up.error) throw up.error;
   return sb.storage.from("profile-media").getPublicUrl(path).data.publicUrl;
 }
+
+// Post media: images are resized; video and audio go up as-is (50 MB limit per file).
+export async function uploadPostMedia(sb, uid, file) {
+  const isImg = /^image\//.test(file.type) && file.type !== "image/gif";
+  if (!isImg && file.size > 50 * 1024 * 1024) throw new Error("Files must be under 50 MB. For longer videos, upload to YouTube or Vimeo and embed the link.");
+  const body = isImg ? await resizeImage(file, 1800, 1800, 0.86) : file;
+  const ext = isImg ? "jpg" : (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const path = `${uid}/posts/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+  const up = await sb.storage.from("post-media").upload(path, body, { contentType: isImg ? "image/jpeg" : file.type, cacheControl: "31536000" });
+  if (up.error) throw up.error;
+  return sb.storage.from("post-media").getPublicUrl(path).data.publicUrl;
+}

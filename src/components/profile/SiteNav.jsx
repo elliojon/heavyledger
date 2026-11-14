@@ -34,6 +34,7 @@ export default function SiteNav({ right }) {
               style={{ width: "100%", background: C.card, color: C.cream, border: `1px solid ${C.line}`, borderRadius: 999, padding: "8px 14px", fontFamily: sans, fontSize: 14, outline: "none" }} />
           </form>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+            <a href="/read" style={{ color: C.muted, fontSize: 14, textDecoration: "none", fontFamily: sans }}>Read</a>
             {right}
             {me === null && <a href="/log" style={{ color: C.gold, fontSize: 14, textDecoration: "none", fontFamily: sans }}>Sign in</a>}
             {me && (

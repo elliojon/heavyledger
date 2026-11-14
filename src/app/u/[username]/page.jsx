@@ -6,6 +6,18 @@ import EditProfile from "../../../components/profile/EditProfile";
 import Training from "../../../components/profile/Training";
 import { ProfileHeader, ConnectButton, About, Credentials, Connections, Testimonials } from "../../../components/profile/Sections";
 import { C, serif, btn } from "../../../components/profile/theme";
+import { Section, Muted } from "../../../components/profile/Sections";
+import { PostRow } from "../../../components/writing/Cards";
+
+function WritingSection({ p, posts, isOwner }) {
+  if (!posts.length && !isOwner) return null;
+  return (
+    <Section title="Writing" right={<span style={{ display: "flex", gap: 14, fontSize: 14 }}>{isOwner && <a href={`/u/${p.username}/write`} style={{ color: C.gold }}>New post</a>}{posts.length > 0 && <a href={`/u/${p.username}/writing`} style={{ color: C.gold }}>All writing →</a>}</span>}>
+      {posts.length ? <div style={{ marginTop: -16 }}>{posts.map((x) => <PostRow key={x.id} post={x} href={`/u/${p.username}/p/${x.slug}`} />)}</div>
+        : <Muted>Share what you know: articles, field notes from training, case studies, programs. Start one from any session in your log with “Write about this session”, or <a href={`/u/${p.username}/write`} style={{ color: C.gold }}>write a new post</a>.</Muted>}
+    </Section>
+  );
+}
 
 const PEOPLE_COLS = "id,username,display_name,avatar_url,headline";
 
@@ -25,10 +37,11 @@ export default function ProfilePage({ params, searchParams }) {
     if (prof.error) { setS({ status: "error", error: prof.error.message }); return; }
     if (!prof.data) { setS({ status: "missing" }); return; }
     const p = prof.data, isOwner = meId === p.id;
-    const [w, cn, ts] = await Promise.all([
+    const [w, cn, ts, po] = await Promise.all([
       sb.from("workouts").select("id,date,visibility,data").eq("user_id", p.id).order("date", { ascending: false }).limit(500),
       sb.from("connections").select("*").or(`requester.eq.${p.id},addressee.eq.${p.id}`),
       sb.from("testimonials").select("*").eq("subject", p.id).order("created_at", { ascending: false }),
+      sb.from("posts").select("id,slug,kind,title,subtitle,excerpt,cover_url,body_html,visibility,published_at").eq("author", p.id).eq("status", "published").order("published_at", { ascending: false }).limit(3),
     ]);
     const rows = cn.data || [];
     const other = (r) => (r.requester === p.id ? r.addressee : r.requester);
@@ -45,7 +58,7 @@ export default function ProfilePage({ params, searchParams }) {
     const byId = Object.fromEntries(people.map((x) => [x.id, x]));
     const workouts = (w.data || []).map((r) => ({ ...r.data, id: r.id, date: r.date, visibility: r.visibility }));
     setS({
-      status: "ok", p, meId, isOwner, relation, workouts, testimonials: tsRows, authors: byId,
+      status: "ok", p, meId, isOwner, relation, workouts, posts: po.data || [], testimonials: tsRows, authors: byId,
       connections: accepted.map((id) => byId[id]).filter(Boolean), pending: pendingIn.map((id) => byId[id]).filter(Boolean),
     });
   }, [username]);
@@ -100,6 +113,7 @@ export default function ProfilePage({ params, searchParams }) {
         onStatus={(id, status) => act(() => sb.from("testimonials").update({ status }).eq("id", id))}
         onDelete={(id) => act(() => sb.from("testimonials").delete().eq("id", id))} />
       <Training p={p} workouts={workouts} isOwner={isOwner} publicView={publicView} username={p.username} />
+      <WritingSection p={p} posts={isOwner && publicView ? s.posts.filter((x) => x.visibility === "public") : s.posts} isOwner={asOwner} />
       {editing && <EditProfile sb={sb} p={p} onClose={() => setEditing(false)} onSaved={(np) => { setEditing(false); setS((x) => ({ ...x, p: np })); }} />}
     </Shell>
   );
